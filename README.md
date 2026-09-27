@@ -1,74 +1,135 @@
-# Demostracion del patron Observador
+# Inventario con Observer, Strategy y Facade
 
-Aplicacion de consola en .NET 10 que demuestra el patron de comportamiento
-**Observer (Observador)** mediante cambios en el inventario de un producto.
+Aplicación de consola en **.NET 10**. Conserva Observer y agrega dos patrones de
+los adjuntos: **Strategy** (comportamiento) y **Facade** (estructural). Son fáciles
+de demostrar con operaciones del inventario: vender y reponer productos.
+Los datos y el historial se mantienen en memoria durante la ejecución.
 
-## Ejecutar
+## Ejecutar y verificar
+
+Desde la raíz del repositorio, con el SDK de .NET 10 instalado:
 
 ```powershell
-cd C:\repos\ObserverStockDemo
 dotnet run --project ObserverStockDemo.csproj
+dotnet run --project Pruebas/Pruebas.csproj
 ```
 
-## Participantes del patron
+El segundo comando ejecuta verificaciones automáticas sin paquetes externos.
+Comprueba ventas, ambas estrategias, cambio de estrategia, notificaciones,
+desuscripción, historial, operaciones inválidas y desbordamiento de cantidades.
+Un fallo produce una excepción y un código de salida de error.
 
-- **Sujeto / Observable:** `InventarioProducto`. Conserva los observadores y les
-  avisa cuando cambia la cantidad.
-- **Observador:** `IObservadorInventario`. Define el metodo comun `Actualizar`.
-- **Observadores concretos:** `ObservadorPantallaInventario`,
-  `ObservadorAlertaExistenciasBajas` y `ObservadorHistorialInventario`.
-- **Evento:** `CambioInventario`. Transporta la informacion del cambio sin
-  exponer el estado interno del sujeto.
+## 1. Observer: avisar cuando cambia el inventario
 
-El sujeto solo conoce objetos mediante `IObservadorInventario`; no sabe si
-muestran datos, envian alertas o guardan un historial.
+- **Sujeto:** `Dominio/InventarioProducto.cs`, implementa `IObservableInventario`.
+- **Contrato:** `Contratos/IObservadorInventario.cs`, método `Actualizar`.
+- **Observadores:** `ObservadorPantallaInventario`, `ObservadorHistorialInventario`
+  y `ObservadorAlertaExistenciasBajas`.
+- **Evento:** `CambioInventario`, contiene producto, cantidad anterior y actual.
 
-## Flujo y puntos de interrupcion sugeridos
+`EstablecerCantidad` modifica las existencias y notifica a los suscriptores.
+Si la cantidad no cambia, no genera evento. La pantalla muestra el cambio,
+el historial lo registra y la alerta avisa si quedan 5 unidades o menos.
+El envío de alertas se simula en consola.
 
-1. `Program.cs`, en `inventario.Suscribir(observadorPantalla)`: observar como se
-   registran las instancias mediante el contrato `IObservadorInventario`.
-2. `InventarioProducto.EstablecerCantidad`, al crear `CambioInventario`: revisar
-   la cantidad anterior y la nueva.
-3. `InventarioProducto.Notificar`, en `observador.Actualizar(cambio)`: recorrer
-   paso a paso la lista. La misma llamada polimorfica entra en tres clases.
-4. En el metodo `Actualizar` de cada observador: comprobar que cada uno tiene una
-   reaccion independiente.
-5. `Program.cs`, en `inventario.Desuscribir(observadorPantalla)`: continuar hasta
-   el ultimo cambio y comprobar que la pantalla ya no recibe la notificacion,
-   mientras el historial y la alerta si la reciben.
+**Aporte:** el inventario no conoce los detalles de cada reacción. Se pueden
+agregar observadores sin cambiar su lógica.
 
-## Principios SOLID
+**Cómo explicarlo:** «Cuando cambia la cantidad, el inventario avisa a todos los
+suscriptores. Cada uno decide qué hacer con ese mismo cambio».
 
-### S — Responsabilidad unica
+## 2. Strategy: elegir cómo reponer productos
 
-Cada clase tiene un motivo principal de cambio: `InventarioProducto` administra
-el inventario y publica sus cambios; `ObservadorPantallaInventario` muestra las
-existencias; `ObservadorHistorialInventario` guarda el historial;
-`ObservadorAlertaExistenciasBajas` decide cuando alertar, y
-`EnviadorNotificacionesConsola` define como se entrega la alerta.
+| Participante | Código | Responsabilidad |
+| --- | --- | --- |
+| Estrategia | `Contratos/IEstrategiaReposicion.cs` | Define `CalcularUnidades(cantidadActual)` |
+| Estrategia concreta | `Estrategias/ReposicionLoteFijo.cs` | Agrega siempre un lote configurado |
+| Estrategia concreta | `Estrategias/ReposicionHastaObjetivo.cs` | Calcula lo que falta para llegar al objetivo |
+| Contexto | `Servicios/ServicioReposicion.cs` | Usa y permite cambiar la estrategia |
 
-### O — Abierto/cerrado
+`ServicioReposicion` mantiene una referencia a `IEstrategiaReposicion`. Su método
+`Reponer` delega el cálculo y aplica el resultado mediante `EstablecerCantidad`.
+No necesita preguntar qué clase de estrategia recibió. `CambiarEstrategia`
+permite reemplazar el algoritmo durante la ejecución.
 
-Se puede agregar otro observador, por ejemplo uno que persista los cambios en una
-base de datos, implementando `IObservadorInventario` y suscribiendolo. No hay que
-modificar `InventarioProducto` ni los observadores existentes.
+Ejemplo de uso, con las dependencias de `Program.cs`:
 
-### L — Sustitucion de Liskov
+```csharp
+var reposicion = new ServicioReposicion(new ReposicionLoteFijo(8));
+var tienda = new FachadaInventario(inventario, reposicion, observadorHistorial);
+tienda.Reponer(); // Si hay 4, agrega 8 y quedan 12.
+reposicion.CambiarEstrategia(new ReposicionHastaObjetivo(20));
+tienda.Reponer(); // Si hay 12, agrega 8 y quedan 20.
+tienda.Reponer(); // Ya hay 20: agrega 0 y no notifica.
+```
 
-Los tres observadores se pueden utilizar donde se espera un
-`IObservadorInventario`. El sujeto invoca `Actualizar` de la misma manera y
-ninguna implementacion rompe el contrato.
+La estrategia hasta objetivo nunca retira unidades si ya se supera el objetivo.
+Los lotes y objetivos deben ser positivos; una suma que exceda `int.MaxValue`
+se rechaza antes de cambiar el inventario.
 
-### I — Segregacion de interfaces
+**Aporte:** separa las reglas de reposición del inventario y del servicio que las
+aplica. Para agregar otra regla basta implementar el contrato y seleccionarla.
 
-`IObservableInventario`, `IObservadorInventario` e `IEnviadorNotificaciones` son
-contratos pequeños y especificos. Una clase que solo recibe cambios no esta
-obligada a implementar metodos para suscribir o enviar mensajes.
+**Cómo explicarlo:** «La tarea es reponer, pero la forma de calcular la cantidad
+puede cambiar. Una estrategia agrega un lote fijo y otra completa un objetivo.
+El servicio trabaja con el mismo contrato para ambas».
 
-### D — Inversion de dependencias
+## 3. Facade: operar el inventario con una interfaz sencilla
 
-`InventarioProducto` depende de `IObservadorInventario`, no de observadores
-concretos. Ademas, `ObservadorAlertaExistenciasBajas` depende de
-`IEnviadorNotificaciones`, no de la consola. Se podria sustituir por un enviador
-de correo sin cambiar la regla de existencias bajas. Las implementaciones se
-conectan en `Program.cs`.
+`Fachadas/FachadaInventario.cs` coordina `InventarioProducto`, `ServicioReposicion`
+y `ObservadorHistorialInventario`. Recibe esas dependencias en el constructor
+y suscribe el historial al inventario.
+
+Expone cuatro operaciones:
+
+- `Vender(unidades)`: valida que sean positivas y que haya existencias, y descuenta.
+- `Reponer()`: delega al servicio y devuelve las unidades agregadas.
+- `ConsultarExistencias()`: devuelve la cantidad actual.
+- `ConsultarHistorial()`: permite leer los cambios registrados.
+
+El cliente llama `tienda.Vender(3)` o `tienda.Reponer()` sin coordinar por su cuenta
+el cálculo, la modificación y la consulta del historial. Las notificaciones se
+producen mediante Observer al modificar el inventario. Una venta inválida no
+altera existencias ni genera notificaciones.
+
+**Aporte:** ofrece una interfaz sencilla para varios componentes. `Program.cs`
+conecta las dependencias y configura la estrategia; la fachada facilita las
+operaciones habituales. Los componentes siguen disponibles, por ejemplo para
+desuscribir la pantalla o cambiar la estrategia.
+
+**Cómo explicarlo:** «La fachada es el punto de entrada para las operaciones de
+la tienda. Le pido vender o reponer y ella delega en los componentes
+correspondientes. Así el cliente necesita conocer menos detalles del sistema».
+
+## Demostración paso a paso
+
+| Acción | Existencias | Resultado |
+| --- | --- | --- |
+| Crear inventario | 10 | Se conectan los tres observadores |
+| Vender 3 | 10 → 7 | Pantalla e historial reaccionan; alerta no cumple el umbral |
+| Vender 3 | 7 → 4 | También se muestra la alerta |
+| Reponer lote de 8 | 4 → 12 | Observer comunica el cambio |
+| Cambiar estrategia y reponer hasta 20 | 12 → 20 | Mismo servicio, otro algoritmo |
+| Reponer otra vez | 20 → 20 | Sin evento ni entrada adicional en el historial |
+| Desuscribir pantalla y vender 17 | 20 → 3 | Historial y alerta siguen recibiendo cambios |
+
+El historial final contiene exactamente cinco cambios:
+`10 → 7`, `7 → 4`, `4 → 12`, `12 → 20`, `20 → 3`.
+
+Para exponerlo con el depurador, coloca puntos de interrupción en
+`FachadaInventario.Vender`, `ServicioReposicion.Reponer`, los dos métodos
+`CalcularUnidades` y `InventarioProducto.Notificar`. Observa cómo una operación
+pasa por la fachada, utiliza una estrategia cuando repone y termina notificando
+mediante Observer.
+
+## Relación con SOLID
+
+- **Responsabilidad única:** las estrategias calculan; el servicio aplica la
+  reposición; la fachada coordina operaciones; cada observador tiene su reacción.
+- **Abierto/cerrado:** nuevas estrategias y observadores se agregan mediante sus
+  contratos sin modificar el servicio de reposición ni el sujeto.
+- **Sustitución de Liskov:** ambas estrategias devuelven unidades no negativas
+  para existencias válidas y pueden sustituirse en el mismo contexto.
+- **Segregación de interfaces:** los contratos son pequeños y específicos.
+- **Inversión de dependencias:** el servicio depende de `IEstrategiaReposicion`,
+  el sujeto de `IObservadorInventario` y la alerta de `IEnviadorNotificaciones`.
